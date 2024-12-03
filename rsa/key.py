@@ -92,12 +92,23 @@ class AbstractKey:
         :return: the loaded key
         :rtype: AbstractKey
         """
-        pass
+        methods = {
+            'PEM': cls._load_pkcs1_pem,
+            'DER': cls._load_pkcs1_der,
+        }
+
+        method = cls._assert_format_exists(format, methods)
+        return method(keyfile)
 
     @staticmethod
     def _assert_format_exists(file_format: str, methods: typing.Mapping[str, typing.Callable]) -> typing.Callable:
         """Checks whether the given file format exists in 'methods'."""
-        pass
+        try:
+            return methods[file_format]
+        except KeyError:
+            formats = ', '.join(sorted(methods.keys()))
+            raise ValueError(f'Unsupported format: {file_format}. '
+                             f'Supported formats: {formats}')
 
     def save_pkcs1(self, format: str='PEM') -> bytes:
         """Saves the key in PKCS#1 DER or PEM format.
@@ -107,7 +118,13 @@ class AbstractKey:
         :returns: the DER- or PEM-encoded key.
         :rtype: bytes
         """
-        pass
+        methods = {
+            'PEM': self._save_pkcs1_pem,
+            'DER': self._save_pkcs1_der,
+        }
+
+        method = self._assert_format_exists(format, methods)
+        return method()
 
     def blind(self, message: int) -> typing.Tuple[int, int]:
         """Performs blinding on the message.
@@ -221,7 +238,19 @@ class PublicKey(AbstractKey):
         PublicKey(2367317549, 65537)
 
         """
-        pass
+        from pyasn1.codec.der import decoder
+        from pyasn1.type import univ
+        
+        try:
+            asn1_data, remaining = decoder.decode(keyfile)
+            if remaining:
+                raise ValueError('trailing data')
+            n = int(asn1_data[0])
+            e = int(asn1_data[1])
+        except (ValueError, IndexError):
+            raise ValueError('invalid DER data')
+        
+        return cls(n, e)
 
     def _save_pkcs1_der(self) -> bytes:
         """Saves the public key in PKCS#1 DER format.
@@ -229,7 +258,14 @@ class PublicKey(AbstractKey):
         :returns: the DER-encoded public key.
         :rtype: bytes
         """
-        pass
+        from pyasn1.type import univ
+        from pyasn1.codec.der import encoder
+
+        asn1_seq = univ.Sequence()
+        asn1_seq.setComponentByPosition(0, univ.Integer(self.n))
+        asn1_seq.setComponentByPosition(1, univ.Integer(self.e))
+
+        return encoder.encode(asn1_seq)
 
     @classmethod
     def _load_pkcs1_pem(cls, keyfile: bytes) -> 'PublicKey':
@@ -242,7 +278,9 @@ class PublicKey(AbstractKey):
             key.
         :return: a PublicKey object
         """
-        pass
+        from rsa import pem
+        der = pem.load_pem(keyfile, b'RSA PUBLIC KEY')
+        return cls._load_pkcs1_der(der)
 
     def _save_pkcs1_pem(self) -> bytes:
         """Saves a PKCS#1 PEM-encoded public key file.
@@ -250,7 +288,8 @@ class PublicKey(AbstractKey):
         :return: contents of a PEM-encoded file that contains the public key.
         :rtype: bytes
         """
-        pass
+        der = self._save_pkcs1_der()
+        return rsa.pem.save_pem(der, b'RSA PUBLIC KEY')
 
     @classmethod
     def load_pkcs1_openssl_pem(cls, keyfile: bytes) -> 'PublicKey':
