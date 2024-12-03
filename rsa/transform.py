@@ -15,7 +15,7 @@ def bytes2int(raw_bytes: bytes) -> int:
     8405007
 
     """
-    pass
+    return int.from_bytes(raw_bytes, byteorder='big')
 
 def int2bytes(number: int, fill_size: int=0) -> bytes:
     """
@@ -37,7 +37,17 @@ def int2bytes(number: int, fill_size: int=0) -> bytes:
         argument to this function to be set to ``False`` otherwise, no
         error will be raised.
     """
-    pass
+    if number < 0:
+        raise ValueError("Number must be non-negative")
+    
+    bytes_required = max(1, math.ceil(number.bit_length() / 8))
+    
+    if fill_size > 0:
+        if bytes_required > fill_size:
+            raise OverflowError(f"Number too large to fit in {fill_size} bytes")
+        return number.to_bytes(fill_size, byteorder='big')
+    else:
+        return number.to_bytes(bytes_required, byteorder='big')
 if __name__ == '__main__':
     import doctest
     doctest.testmod()
