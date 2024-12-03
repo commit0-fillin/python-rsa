@@ -30,7 +30,9 @@ def bit_size(num: int) -> int:
     :returns:
         Returns the number of bits in the integer.
     """
-    pass
+    if num == 0:
+        return 0
+    return len(bin(abs(num))) - 2  # Subtract 2 to remove '0b' prefix
 
 def byte_size(number: int) -> int:
     """
@@ -52,7 +54,7 @@ def byte_size(number: int) -> int:
     :returns:
         The number of bytes required to hold a specific long number.
     """
-    pass
+    return (bit_size(number) + 7) // 8
 
 def ceil_div(num: int, div: int) -> int:
     """
@@ -72,11 +74,19 @@ def ceil_div(num: int, div: int) -> int:
 
     :return: Rounded up result of the division between the parameters.
     """
-    pass
+    return -(-num // div)
 
 def extended_gcd(a: int, b: int) -> typing.Tuple[int, int, int]:
     """Returns a tuple (r, i, j) such that r = gcd(a, b) = ia + jb"""
-    pass
+    x, y = 0, 1
+    lastx, lasty = 1, 0
+
+    while b:
+        a, (q, b) = b, divmod(a, b)
+        x, lastx = lastx - q * x, x
+        y, lasty = lasty - q * y, y
+
+    return (a, lastx, lasty)
 
 def inverse(x: int, n: int) -> int:
     """Returns the inverse of x % n under multiplication, a.k.a x^-1 (mod n)
@@ -86,7 +96,10 @@ def inverse(x: int, n: int) -> int:
     >>> (inverse(143, 4) * 143) % 4
     1
     """
-    pass
+    gcd, a, _ = extended_gcd(x, n)
+    if gcd != 1:
+        raise NotRelativePrimeError(x, n, gcd)
+    return a % n
 
 def crt(a_values: typing.Iterable[int], modulo_values: typing.Iterable[int]) -> int:
     """Chinese Remainder Theorem.
@@ -107,7 +120,17 @@ def crt(a_values: typing.Iterable[int], modulo_values: typing.Iterable[int]) -> 
     >>> crt([2, 3, 0], [7, 11, 15])
     135
     """
-    pass
+    total = 0
+    prod = 1
+
+    for m in modulo_values:
+        prod *= m
+
+    for a_i, m_i in zip(a_values, modulo_values):
+        p = prod // m_i
+        total += a_i * inverse(p, m_i) * p
+
+    return total % prod
 if __name__ == '__main__':
     import doctest
     doctest.testmod()
