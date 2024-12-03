@@ -51,7 +51,26 @@ def _pad_for_encryption(message: bytes, target_length: int) -> bytes:
     b'\\x00hello'
 
     """
-    pass
+    max_msglength = target_length - 11
+    msglength = len(message)
+    
+    if msglength > max_msglength:
+        raise OverflowError('%i bytes needed for message, but there is only'
+                            ' space for %i' % (msglength, max_msglength))
+    
+    padding_length = target_length - msglength - 3
+    
+    padding = b''
+    while len(padding) < padding_length:
+        needed_bytes = padding_length - len(padding)
+        new_padding = os.urandom(needed_bytes + 5)
+        new_padding = new_padding.replace(b'\x00', b'')
+        padding = padding + new_padding[:needed_bytes]
+    
+    return b''.join([b'\x00\x02',
+                     padding,
+                     b'\x00',
+                     message])
 
 def _pad_for_signing(message: bytes, target_length: int) -> bytes:
     """Pads the message for signing, returning the padded message.
@@ -71,7 +90,19 @@ def _pad_for_signing(message: bytes, target_length: int) -> bytes:
     b'\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff'
 
     """
-    pass
+    max_msglength = target_length - 11
+    msglength = len(message)
+    
+    if msglength > max_msglength:
+        raise OverflowError('%i bytes needed for message, but there is only'
+                            ' space for %i' % (msglength, max_msglength))
+    
+    padding_length = target_length - msglength - 3
+    
+    return b''.join([b'\x00\x01',
+                     padding_length * b'\xff',
+                     b'\x00',
+                     message])
 
 def encrypt(message: bytes, pub_key: key.PublicKey) -> bytes:
     """Encrypts the given message using PKCS#1 v1.5
@@ -94,7 +125,12 @@ def encrypt(message: bytes, pub_key: key.PublicKey) -> bytes:
     True
 
     """
-    pass
+    keylength = common.byte_size(pub_key.n)
+    padded = _pad_for_encryption(message, keylength)
+    payload = transform.bytes2int(padded)
+    encrypted = core.encrypt_int(payload, pub_key.e, pub_key.n)
+    block = transform.int2bytes(encrypted, keylength)
+    return block
 
 def decrypt(crypto: bytes, priv_key: key.PrivateKey) -> bytes:
     """Decrypts the given message using PKCS#1 v1.5
@@ -146,7 +182,22 @@ def decrypt(crypto: bytes, priv_key: key.PrivateKey) -> bytes:
     rsa.pkcs1.DecryptionError: Decryption failed
 
     """
-    pass
+    blocksize = common.byte_size(priv_key.n)
+    encrypted = transform.bytes2int(crypto)
+    decrypted = priv_key.blinded_decrypt(encrypted)
+    cleartext = transform.int2bytes(decrypted, blocksize)
+
+    # If we can't find the cleartext marker, decryption failed.
+    if cleartext[0:2] != b'\x00\x02':
+        raise DecryptionError('Decryption failed')
+
+    # Find the 00 separator between the padding and the message
+    try:
+        sep_idx = cleartext.index(b'\x00', 2)
+    except ValueError:
+        raise DecryptionError('Decryption failed')
+
+    return cleartext[sep_idx+1:]
 
 def sign_hash(hash_value: bytes, priv_key: key.PrivateKey, hash_method: str) -> bytes:
     """Signs a precomputed hash with the private key.
@@ -163,7 +214,21 @@ def sign_hash(hash_value: bytes, priv_key: key.PrivateKey, hash_method: str) -> 
         requested hash.
 
     """
-    pass
+    # Get the ASN1 code for this hash method
+    if hash_method not in HASH_ASN1:
+        raise ValueError('Invalid hash method: %s' % hash_method)
+    asn1code = HASH_ASN1[hash_method]
+
+    # Encrypt the hash with the private key
+    cleartext = asn1code + hash_value
+    keylength = common.byte_size(priv_key.n)
+    padded = _pad_for_signing(cleartext, keylength)
+
+    payload = transform.bytes2int(padded)
+    encrypted = priv_key.blinded_encrypt(payload)
+    block = transform.int2bytes(encrypted, keylength)
+
+    return block
 
 def sign(message: bytes, priv_key: key.PrivateKey, hash_method: str) -> bytes:
     """Signs the message with the private key.
@@ -182,7 +247,8 @@ def sign(message: bytes, priv_key: key.PrivateKey, hash_method: str) -> bytes:
         requested hash.
 
     """
-    pass
+    hash_value = compute_hash(message, hash_method)
+    return sign_hash(hash_value, priv_key, hash_method)
 
 def verify(message: bytes, signature: bytes, pub_key: key.PublicKey) -> str:
     """Verifies that the signature matches the message.
@@ -198,7 +264,24 @@ def verify(message: bytes, signature: bytes, pub_key: key.PublicKey) -> str:
     :returns: the name of the used hash.
 
     """
-    pass
+    blocksize = common.byte_size(pub_key.n)
+    encrypted = transform.bytes2int(signature)
+    decrypted = core.decrypt_int(encrypted, pub_key.e, pub_key.n)
+    clearsig = transform.int2bytes(decrypted, blocksize)
+
+    # Get the hash method
+    method_name = _find_method_hash(clearsig)
+    message_hash = compute_hash(message, method_name)
+
+    # Reconstruct the expected padded hash
+    cleartext = HASH_ASN1[method_name] + message_hash
+    expected = _pad_for_signing(cleartext, blocksize)
+
+    # Compare with the signed one
+    if expected != clearsig:
+        raise VerificationError('Verification failed')
+
+    return method_name
 
 def find_signature_hash(signature: bytes, pub_key: key.PublicKey) -> str:
     """Returns the hash name detected from the signature.
@@ -210,7 +293,12 @@ def find_signature_hash(signature: bytes, pub_key: key.PublicKey) -> str:
     :param pub_key: the :py:class:`rsa.PublicKey` of the person signing the message.
     :returns: the name of the used hash.
     """
-    pass
+    blocksize = common.byte_size(pub_key.n)
+    encrypted = transform.bytes2int(signature)
+    decrypted = core.decrypt_int(encrypted, pub_key.e, pub_key.n)
+    clearsig = transform.int2bytes(decrypted, blocksize)
+
+    return _find_method_hash(clearsig)
 
 def yield_fixedblocks(infile: typing.BinaryIO, blocksize: int) -> typing.Iterator[bytes]:
     """Generator, yields each block of ``blocksize`` bytes in the input file.
@@ -219,7 +307,11 @@ def yield_fixedblocks(infile: typing.BinaryIO, blocksize: int) -> typing.Iterato
     :param blocksize: block size in bytes.
     :returns: a generator that yields the contents of each block
     """
-    pass
+    while True:
+        block = infile.read(blocksize)
+        if not block:
+            break
+        yield block
 
 def compute_hash(message: typing.Union[bytes, typing.BinaryIO], method_name: str) -> bytes:
     """Returns the message digest.
@@ -231,7 +323,19 @@ def compute_hash(message: typing.Union[bytes, typing.BinaryIO], method_name: str
         :py:const:`rsa.pkcs1.HASH_METHODS`.
 
     """
-    pass
+    if method_name not in HASH_METHODS:
+        raise ValueError('Invalid hash method: %s' % method_name)
+
+    method = HASH_METHODS[method_name]
+    hasher = method()
+
+    if isinstance(message, bytes):
+        hasher.update(message)
+    else:
+        for block in yield_fixedblocks(message, 1024):
+            hasher.update(block)
+
+    return hasher.digest()
 
 def _find_method_hash(clearsig: bytes) -> str:
     """Finds the hash method.
@@ -240,7 +344,11 @@ def _find_method_hash(clearsig: bytes) -> str:
     :return: the used hash method.
     :raise VerificationFailed: when the hash method cannot be found
     """
-    pass
+    for (hashname, asn1code) in HASH_ASN1.items():
+        if clearsig.startswith(asn1code):
+            return hashname
+
+    raise VerificationError('Verification failed')
 __all__ = ['encrypt', 'decrypt', 'sign', 'verify', 'DecryptionError', 'VerificationError', 'CryptoError']
 if __name__ == '__main__':
     print('Running doctests 1000x or until failure')
