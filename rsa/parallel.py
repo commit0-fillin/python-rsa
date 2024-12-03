@@ -30,7 +30,26 @@ def getprime(nbits: int, poolsize: int) -> int:
     True
 
     """
-    pass
+    def worker(nbits: int, pipe: Connection) -> None:
+        while True:
+            prime = rsa.prime.getprime(nbits)
+            pipe.send(prime)
+
+    pipes = []
+    processes = []
+    for _ in range(poolsize):
+        recv_end, send_end = mp.Pipe(False)
+        p = mp.Process(target=worker, args=(nbits, send_end))
+        pipes.append(recv_end)
+        processes.append(p)
+        p.start()
+
+    result = pipes[0].recv()
+    
+    for p in processes:
+        p.terminate()
+
+    return result
 __all__ = ['getprime']
 if __name__ == '__main__':
     print('Running doctests 1000x or until failure')
