@@ -14,7 +14,53 @@ Indexable = typing.Union[typing.Tuple, typing.List[str]]
 
 def keygen() -> None:
     """Key generator."""
-    pass
+    parser = optparse.OptionParser(usage='usage: %prog [options]',
+                                   description='Generates a new RSA key pair of "bits" bits.')
+    parser.add_option('--pubout', type='string',
+                      help='Output filename for the public key. The public key is '
+                           'not saved if this option is not present. You can use '
+                           'this option to override the default filename of '
+                           '<private>_pub.pem when --out is specified.')
+    parser.add_option('--out', type='string',
+                      help='Output filename for the private key. The key is '
+                           'written to stdout if this option is not present.')
+    parser.add_option('--form', choices=('PEM', 'DER'), default='PEM',
+                      help='key format of the private and public keys - '
+                           'default PEM')
+    parser.add_option('--nbits', type='int', default=2048,
+                      help='Number of bits in the key, default 2048')
+    
+    (cli, cli_args) = parser.parse_args(sys.argv[1:])
+    
+    if cli_args:
+        parser.print_help()
+        raise SystemExit(1)
+    
+    print('Generating %i-bit key' % cli.nbits, file=sys.stderr)
+    (pub_key, priv_key) = rsa.newkeys(cli.nbits)
+    
+    # Save private key
+    if cli.out:
+        data = priv_key.save_pkcs1(format=cli.form)
+        with open(cli.out, 'wb') as outfile:
+            outfile.write(data)
+        print('Private key saved to %s' % cli.out, file=sys.stderr)
+    else:
+        data = priv_key.save_pkcs1(format=cli.form)
+        print(data.decode('ascii'))
+    
+    # Save public key
+    if cli.pubout:
+        data = pub_key.save_pkcs1(format=cli.form)
+        with open(cli.pubout, 'wb') as outfile:
+            outfile.write(data)
+        print('Public key saved to %s' % cli.pubout, file=sys.stderr)
+    elif cli.out:
+        data = pub_key.save_pkcs1(format=cli.form)
+        public_fn = '%s_pub.pem' % os.path.splitext(cli.out)[0]
+        with open(public_fn, 'wb') as outfile:
+            outfile.write(data)
+        print('Public key saved to %s' % public_fn, file=sys.stderr)
 
 class CryptoOperation(metaclass=abc.ABCMeta):
     """CLI callable that operates with input, output, and a key."""
@@ -43,7 +89,7 @@ class CryptoOperation(metaclass=abc.ABCMeta):
 
         :returns: the data to write to the output.
         """
-        pass
+        raise NotImplementedError("This method should be implemented in a subclass.")
 
     def __call__(self) -> None:
         """Runs the program."""
@@ -60,19 +106,48 @@ class CryptoOperation(metaclass=abc.ABCMeta):
 
         :returns: (cli_opts, cli_args)
         """
-        pass
+        parser = optparse.OptionParser(usage=self.usage, description=self.description)
+
+        parser.add_option('-i', '--input', dest='input', help=self.input_help)
+        parser.add_option('-o', '--output', dest='output', help=self.output_help)
+
+        if self.key_class == rsa.PublicKey:
+            parser.add_option('--keyform', dest='keyform', choices=['PEM', 'DER'],
+                              default='PEM', help='Key format of the %s key - default PEM' % self.keyname)
+
+        (cli, cli_args) = parser.parse_args()
+
+        if len(cli_args) != self.expected_cli_args:
+            parser.print_help()
+            raise SystemExit(1)
+
+        return (cli, cli_args)
 
     def read_key(self, filename: str, keyform: str) -> rsa.key.AbstractKey:
         """Reads a public or private key."""
-        pass
+        with open(filename, 'rb') as keyfile:
+            keydata = keyfile.read()
+        
+        if keyform == 'DER':
+            return self.key_class.load_pkcs1(keydata, format='DER')
+        else:
+            return self.key_class.load_pkcs1(keydata, format='PEM')
 
     def read_infile(self, inname: str) -> bytes:
         """Read the input file"""
-        pass
+        if inname:
+            with open(inname, 'rb') as infile:
+                return infile.read()
+        else:
+            return sys.stdin.buffer.read()
 
     def write_outfile(self, outdata: bytes, outname: str) -> None:
         """Write the output file"""
-        pass
+        if outname:
+            with open(outname, 'wb') as outfile:
+                outfile.write(outdata)
+        else:
+            sys.stdout.buffer.write(outdata)
 
 class EncryptOperation(CryptoOperation):
     """Encrypts a file."""
@@ -84,7 +159,7 @@ class EncryptOperation(CryptoOperation):
 
     def perform_operation(self, indata: bytes, pub_key: rsa.key.AbstractKey, cli_args: Indexable=()) -> bytes:
         """Encrypts files."""
-        pass
+        return rsa.encrypt(indata, pub_key)
 
 class DecryptOperation(CryptoOperation):
     """Decrypts a file."""
@@ -97,7 +172,7 @@ class DecryptOperation(CryptoOperation):
 
     def perform_operation(self, indata: bytes, priv_key: rsa.key.AbstractKey, cli_args: Indexable=()) -> bytes:
         """Decrypts files."""
-        pass
+        return rsa.decrypt(indata, priv_key)
 
 class SignOperation(CryptoOperation):
     """Signs a file."""
@@ -113,7 +188,8 @@ class SignOperation(CryptoOperation):
 
     def perform_operation(self, indata: bytes, priv_key: rsa.key.AbstractKey, cli_args: Indexable) -> bytes:
         """Signs files."""
-        pass
+        hash_method = cli_args[1]
+        return rsa.sign(indata, priv_key, hash_method)
 
 class VerifyOperation(CryptoOperation):
     """Verify a signature."""
@@ -129,7 +205,16 @@ class VerifyOperation(CryptoOperation):
 
     def perform_operation(self, indata: bytes, pub_key: rsa.key.AbstractKey, cli_args: Indexable) -> None:
         """Verifies files."""
-        pass
+        signature_file = cli_args[1]
+        with open(signature_file, 'rb') as sigfile:
+            signature = sigfile.read()
+        
+        try:
+            rsa.verify(indata, signature, pub_key)
+            print('Verification OK', file=sys.stderr)
+        except rsa.VerificationError:
+            print('Verification failed', file=sys.stderr)
+            raise SystemExit(1)
 encrypt = EncryptOperation()
 decrypt = DecryptOperation()
 sign = SignOperation()
